@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: shellcheck --version
+      - run: shellcheck buzzer.sh install.sh tests/run.sh
+
+  psscriptanalyzer:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck
+      - name: Analyse
+        shell: pwsh
+        run: |
+          # -Path takes a single path, not an array, so go file by file.
+          $findings = @()
+          foreach ($file in @('buzzer.ps1', 'tests/run.ps1')) {
+            $findings += Invoke-ScriptAnalyzer -Path $file -Settings ./PSScriptAnalyzerSettings.psd1
+          }
+          if ($findings) {
+            $findings | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message |
+              Out-String -Width 200 | Write-Host
+            throw "PSScriptAnalyzer found $($findings.Count) issue(s)"
+          }
+          Write-Host 'PSScriptAnalyzer: clean'
+
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The committed sounds/bird.wav must still match what the generator
+      # produces, or the two have drifted apart.
+      - name: bird.wav matches its generator
+        shell: bash
+        run: python3 tools/make-sounds.py --check
+
+      - name: Silence rules (bash)
+        shell: bash
+        run: ./tests/run.sh
+
+      - name: Silence rules (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File tests/run.ps1
+
+      # A smoke test on the real machine: no fakes, whatever audio and focus
+      # detection the runner actually has. The runners have no audio device, so
+      # this checks the CLI stays usable rather than that anything is audible.
+      - name: CLI smoke test (bash)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eux
+          ./buzzer.sh version
+          ./buzzer.sh list
+          ./buzzer.sh status
+          ./buzzer.sh hooks
+          ./buzzer.sh sounds
+          ./buzzer.sh doctor || echo "doctor reported problems (expected: CI runners have no audio)"
+          # Hooks must exit 0 and stay silent even on a machine with no speaker.
+          out=$(printf '{"session_id":"ci"}' | ./buzzer.sh hook done 2>&1)
+          test -z "$out" || { echo "hook wrote to stdout/stderr: $out"; exit 1; }
+
+      - name: CLI smoke test (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./buzzer.ps1 version
+          ./buzzer.ps1 list
+          ./buzzer.ps1 status
+          ./buzzer.ps1 hooks
+          ./buzzer.ps1 doctor
+          $out = ('{"session_id":"ci"}' | pwsh -NoProfile -File ./buzzer.ps1 hook done 2>&1 | Out-String)
+          if ($out.Trim()) { throw "hook wrote to stdout/stderr: $out" }
+
+      - name: Installer runs and leaves settings.json alone
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eux
+          mkdir -p "$HOME/.claude"
+          printf '{"model":"opus"}' > "$HOME/.claude/settings.json"
+          before=$(cat "$HOME/.claude/settings.json")
+          PREFIX="$HOME/.local/bin" ./install.sh
+          "$HOME/.local/bin/buzzer" list
+          test "$before" = "$(cat "$HOME/.claude/settings.json")"
+          PREFIX="$HOME/.local/bin" ./install.sh --uninstall

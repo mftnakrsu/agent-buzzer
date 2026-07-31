@@ -1,0 +1,88 @@
+name: Bug report
+description: Something plays when it shouldn't, or doesn't when it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two commands answer most "no sound" reports on their own, so they are
+        the first two boxes below. Please don't skip them — without `doctor`
+        output the first reply is just going to be "please run doctor".
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `buzzer doctor`
+      description: |
+        Paste it as-is. It lists your audio backend, focus detection, and any
+        missing sound files.
+
+        It deliberately avoids identifying you: home paths are abbreviated to
+        `~` and the machine name is left out, so what you paste here is your
+        OS, kernel version and config — nothing that names you. Do glance over
+        it anyway if you have set a custom sound path.
+      render: text
+      placeholder: |
+        $ buzzer doctor
+        agent-buzzer 0.1.0 — doctor
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `buzzer status`
+      description: >
+        This one says whether it would play right now, and if not, which rule
+        blocked it — which is usually the answer.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: "macOS 14.6.1 (Apple Silicon) / Ubuntu 24.04 Wayland / Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: >
+        Which terminal app, and whether you were running inside tmux, screen or
+        an SSH session. `echo $TERM_PROGRAM` if you're not sure.
+      placeholder: "Ghostty, no tmux / Cursor integrated terminal / iTerm2 inside tmux"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+      placeholder: |
+        Expected: a sound after a 4-minute refactor while I was in the browser.
+        Happened: silence. A short chat reply right after did play a sound.
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant lines from `buzzer log`
+      description: >
+        Optional but very helpful. Each decision is logged with the rule that
+        caused it, e.g. `decision=silent event=done reason="turn too short"`.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I ran `buzzer test done` and heard the sound (so audio itself works)
+        - label: The hooks are wired up in `~/.claude/settings.json` (`buzzer hooks` shows the snippet)
+        - label: I'm using the latest version
