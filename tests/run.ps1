@@ -318,7 +318,9 @@ Invoke-TestCase 'the hooks snippet covers every event' {
 Invoke-TestCase 'the hooks snippet marks hooks async' {
     # Count inside the JSON block only. The prose around it discusses async too,
     # and a test that counts the explanation is measuring the wrong thing.
-    $out = Invoke-Cli 'hooks'
+    # Strip CR first: this runs on Windows, where the snippet comes back with
+    # CRLF endings and a search for "{`n" finds nothing at all.
+    $out = (Invoke-Cli 'hooks') -replace "`r", ''
     $start = $out.IndexOf("{`n")
     $end = $out.LastIndexOf("`n}")
     if ($start -lt 0 -or $end -le $start) {
