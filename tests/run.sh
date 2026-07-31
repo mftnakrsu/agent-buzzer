@@ -20,8 +20,10 @@
 #   BUZZER_FAKE_NOW       the wall clock, as HH:MM
 
 # Every test function is called indirectly by run_test, which shellcheck cannot
-# see, so its "this function is never invoked" check does not apply here.
-# shellcheck disable=SC2329
+# see, so its "never invoked" / "unreachable" checks do not apply here. Both
+# codes are listed because shellcheck renamed this diagnostic: 0.9 reports
+# SC2317, 0.10+ reports SC2329, and CI runs an older build than most laptops.
+# shellcheck disable=SC2329,SC2317
 
 set -u
 
@@ -915,9 +917,12 @@ test_doctor_does_not_leak_hostname_or_home_path() {
     esac
   fi
 
-  # Still has to be useful: the OS and kernel version are the parts that
-  # actually explain a platform-specific bug.
-  assert_contains "macos" "$out" "doctor platform section"
+  # Still has to be useful: redacting must not have emptied the section. The
+  # kernel line is the part that actually explains a platform-specific bug.
+  # Deliberately not asserting a specific OS name — this suite runs on macOS,
+  # Linux and Git Bash, and hard-coding one of them made CI red on the other two.
+  assert_contains "[platform]" "$out" "doctor platform section"
+  assert_contains "kernel" "$out" "doctor platform section"
 }
 
 # agent-buzzer is not a Claude Code accessory. Keeping its config and logs

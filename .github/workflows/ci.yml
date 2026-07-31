@@ -53,6 +53,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A bare Ubuntu runner has none of the players buzzer looks for, so
+      # doctor correctly reports an unusable setup and the suite's
+      # "healthy setup" test correctly fails. Installing aplay makes the
+      # environment honest instead of making the test lenient — and it means
+      # the Linux audio-backend path gets exercised rather than skipped.
+      # There is still no sound device; only the binary needs to exist.
+      - name: Give Linux an audio backend
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y alsa-utils
+
       # The committed sounds/bird.wav must still match what the generator
       # produces, or the two have drifted apart.
       - name: bird.wav matches its generator
