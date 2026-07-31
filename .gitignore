@@ -1,0 +1,14 @@
+# Nothing here is generated at build time — sounds/bird.wav is committed on
+# purpose so the tool works straight out of a clone.
+
+# macOS
+.DS_Store
+
+# editors
+.idea/
+.vscode/
+*.swp
+
+# test leftovers, if a run is interrupted before it can clean up
+/tmp/
+buzzer-test.*
