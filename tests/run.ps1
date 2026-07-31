@@ -345,6 +345,31 @@ Invoke-TestCase 'an out-of-range threshold falls back instead of silencing' {
     Assert-Played 'done'
 }
 
+# buzzer.sh was fixed for this; the port was not, and it wrote ~2 KB of
+# PowerShell error text to stderr — straight into the agent's session, which
+# cardinal rule 2 exists to prevent. cron, systemd units and some CI runners
+# invoke commands with no HOME. Kept in step with the bash suite's
+# "hook survives an unset HOME".
+#
+# On Windows $HOME comes from USERPROFILE rather than the HOME variable, so
+# this cannot be provoked there and the test passes trivially. It is a real
+# assertion on macOS and Linux, which is where pwsh reads $env:HOME.
+Invoke-TestCase 'hook survives an unset HOME' {
+    $savedHome = $env:HOME
+    $savedBuzzerHome = $env:BUZZER_HOME
+    try {
+        Remove-Item Env:\HOME -ErrorAction SilentlyContinue
+        Remove-Item Env:\BUZZER_HOME -ErrorAction SilentlyContinue
+        $out = ('' | & $psExe -NoProfile -File $buzzer 'hook' 'done' 2>&1 | Out-String)
+        if ($out.Trim()) {
+            Add-Failure "hook wrote to stdout/stderr with HOME unset: $($out.Trim())"
+        }
+    } finally {
+        if ($savedHome) { $env:HOME = $savedHome }
+        if ($savedBuzzerHome) { $env:BUZZER_HOME = $savedBuzzerHome }
+    }
+}
+
 # The issue template asks people to paste doctor output into a public bug
 # report. Home paths carry the username along with it. Kept in step with the
 # bash suite's "doctor leaks neither hostname nor home path".

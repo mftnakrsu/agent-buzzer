@@ -62,7 +62,22 @@ $script:RepeatGapMs = 350
 #
 # BUZZER_HOME can be overridden, which is also how the tests run against a
 # throwaway state directory instead of your real one.
-$script:BuzzerHome = if ($env:BUZZER_HOME) { $env:BUZZER_HOME } else { Join-Path $HOME '.agent-buzzer' }
+#
+# $HOME is guarded because it can be null: pwsh derives it from $env:HOME on
+# macOS and Linux, and cron, systemd units and some CI runners provide no HOME
+# at all. Join-Path then throws at load time — before any of the hook's own
+# error handling exists — and roughly 2 KB of PowerShell error text goes
+# straight to stderr, which lands in the agent's session. Mirrors the
+# ${HOME:-/nonexistent} guard in buzzer.sh.
+$script:BuzzerHome = if ($env:BUZZER_HOME) {
+    $env:BUZZER_HOME
+} elseif ($HOME) {
+    Join-Path $HOME '.agent-buzzer'
+} else {
+    # Nowhere legitimate to keep state, but the hook must still exit 0 in
+    # silence rather than write state somewhere surprising.
+    Join-Path '/nonexistent' '.agent-buzzer'
+}
 # Abbreviate $HOME to ~ in anything a user might paste somewhere public. The
 # issue template asks for `buzzer doctor` output, and a home path hands over a
 # username to anyone reading the thread. Mirrors tilde() in buzzer.sh.
@@ -937,8 +952,10 @@ function Show-Doctor {
     $out.Add('[hooks]')
     $out.Add('  buzzer never edits settings.json. Run "buzzer hooks" for the snippet')
     $out.Add('  and add it yourself via /hooks.')
-    $settings = Join-Path $HOME '.claude\settings.json'
-    if (Test-Path -LiteralPath $settings) {
+    # Same guard as BuzzerHome above: $HOME can be null, and doctor throwing
+    # here would take down the one command people run when something is wrong.
+    $settings = if ($HOME) { Join-Path $HOME '.claude\settings.json' } else { '' }
+    if ($settings -and (Test-Path -LiteralPath $settings)) {
         if (Select-String -LiteralPath $settings -Pattern 'buzzer' -Quiet -ErrorAction SilentlyContinue) {
             $out.Add('  settings.json   mentions buzzer — looks wired up')
         } else {
