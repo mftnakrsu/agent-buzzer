@@ -318,6 +318,20 @@ test_enabled_accepts_yes_no_spellings() {
   assert_played 'done'
 }
 
+test_gate_defaults_play_when_keys_are_omitted() {
+  # The shipped defaults are the safety net for hand-edited configs that omit
+  # a key. Every gate key missing at once must still allow an old enough turn
+  # through, even with the clock inside the default quiet window.
+  cat >"$STATE/config" <<EOF
+volume=0.7
+done_sound=$ROOT/sounds/bird.wav
+EOF
+  NOW="23:30"
+  mark_ago abc123 120
+  hook 'done' abc123
+  assert_played 'done'
+}
+
 # ---------------------------------------------------------------------------
 # Rule 2: quiet hours
 # ---------------------------------------------------------------------------
@@ -1054,6 +1068,7 @@ run_test "the mark is consumed when the turn ends" test_mark_is_consumed_after_d
 run_test "disabled suppresses everything" test_disabled_suppresses_everything
 run_test "per-event disable affects only that event" test_per_event_disable_only_affects_that_event
 run_test "on/off spellings are accepted" test_enabled_accepts_yes_no_spellings
+run_test "gate defaults play when keys are omitted" test_gate_defaults_play_when_keys_are_omitted
 
 run_test "quiet hours off ignores the window" test_quiet_hours_off_by_default_ignores_window
 run_test "quiet hours wrapping midnight: 23:30 is quiet" test_quiet_hours_wrapping_midnight_before_midnight
