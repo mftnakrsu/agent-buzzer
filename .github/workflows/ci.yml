@@ -43,6 +43,25 @@ jobs:
           }
           Write-Host 'PSScriptAnalyzer: clean'
 
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # All three from the start. The rules module is pure and has no
+        # platform-specific code yet, but the whole reason for this port is that
+        # "it worked on macOS" has cost this project three CI failures already.
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
   test:
     name: tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
