@@ -175,6 +175,15 @@ project wants.
 `~/.agent-buzzer/config`, plain `key=value`, one per line, `#` starts a
 comment. Edit it by hand; the CLI writes the same file.
 
+`buzzer` takes a short lock while it writes, so two commands running at once
+cannot lose each other's changes. A command that cannot get the lock within five
+seconds refuses rather than guessing, and names the lock so you can remove it if
+something died holding it. Editing the file in your own editor ignores all of
+this — the lock only coordinates buzzer with itself.
+
+`buzzer.ps1` does not have the lock yet, so concurrent writes on Windows can
+still lose one another.
+
 ```ini
 enabled=true
 threshold_seconds=30

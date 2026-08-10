@@ -68,6 +68,12 @@ tilde() {
 CONFIG_FILE="$BUZZER_HOME/config"
 MARKS_DIR="$BUZZER_HOME/marks"
 LOG_FILE="$BUZZER_HOME/log"
+CONFIG_LOCK="$CONFIG_FILE.lock"
+
+# How long a config write will wait for another one to finish before giving up
+# and saying so. Only CLI commands take this lock — hooks never write config —
+# so waiting here can never delay an agent turn.
+CONFIG_LOCK_TIMEOUT=5
 
 # The log is a debugging aid, not an archive. Trim it back to LOG_KEEP lines
 # once it grows past LOG_MAX so it can never eat disk.
@@ -121,7 +127,7 @@ OS=$(os_name)
 # ---------------------------------------------------------------------------
 
 log() {
-  local msg="$1" lines
+  local msg="$1" lines tmp
   mkdir -p "$BUZZER_HOME" 2>/dev/null || return 0
   printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$msg" \
     >>"$LOG_FILE" 2>/dev/null || return 0
@@ -131,8 +137,18 @@ log() {
     '' | *[!0-9]*) return 0 ;;
   esac
   if [ "$lines" -gt "$LOG_MAX" ]; then
-    tail -n "$LOG_KEEP" "$LOG_FILE" >"$LOG_FILE.trim" 2>/dev/null &&
-      mv "$LOG_FILE.trim" "$LOG_FILE" 2>/dev/null
+    # Per-process scratch file, never a shared one. Two hooks trimming at the
+    # same moment used to write into the same "$LOG_FILE.trim" and then both
+    # rename it, which left the log holding whatever partial read one of them
+    # happened to have — observed emptying a 160-line log down to zero. The
+    # rename itself is atomic, so a unique name is the whole fix. No lock:
+    # log() runs inside hooks, and hooks must never wait on each other.
+    tmp="$LOG_FILE.trim.$$"
+    if tail -n "$LOG_KEEP" "$LOG_FILE" >"$tmp" 2>/dev/null; then
+      mv "$tmp" "$LOG_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    else
+      rm -f "$tmp" 2>/dev/null
+    fi
   fi
   return 0
 }
@@ -289,10 +305,63 @@ event_volume() {
   echo 0.7
 }
 
+# cfg_lock / cfg_unlock — mutual exclusion around the read-modify-write in
+# cfg_set.
+#
+# The rename in cfg_set is already atomic, so the file on disk is never torn.
+# What it does not prevent is a lost update: two processes both read the old
+# config, each rewrites it with only its own change, and the second rename wins
+# outright. Sixteen concurrent writes of distinct keys used to land five.
+#
+# mkdir is the lock because it is the one portable atomic test-and-set in POSIX
+# sh: it either creates the directory or fails, with no window in between.
+# flock is not an option — macOS does not ship it.
+cfg_lock() {
+  local waited=0
+
+  # Nothing here reaps a lock it did not take, and that is deliberate.
+  #
+  # The obvious feature is missing on purpose: a lock left by a SIGKILL or a
+  # power cut is never cleared automatically. Every version of that idea needs
+  # to decide "the owner is dead" and then act on the decision, and in POSIX sh
+  # those are two steps with no compare-and-swap to fuse them. Whatever fills
+  # the gap — checking once up front, moving the directory aside instead of
+  # deleting it — only narrows the window in which a writer carries a stale
+  # verdict onto somebody else's fresh lock. The version of this function that
+  # reaped on age lost updates in 2 runs out of 10 with four writers arriving
+  # at one abandoned lock, which is the very failure the lock exists to stop.
+  #
+  # So a wedged lock stays wedged, and cfg_set says so with the path to remove.
+  # Refusing loudly is a worse afternoon than silently dropping a setting is a
+  # worse year, and the trap below means only a SIGKILL or a lost power rail
+  # can wedge it in the first place.
+  while ! mkdir "$CONFIG_LOCK" 2>/dev/null; do
+    if [ "$waited" -ge $((CONFIG_LOCK_TIMEOUT * 10)) ]; then
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  # Releasing on the way out matters more than the lock itself: a Ctrl-C
+  # between mkdir and rmdir would otherwise wedge every later write.
+  trap 'cfg_unlock' EXIT HUP INT TERM
+  return 0
+}
+
+cfg_unlock() {
+  rm -rf "$CONFIG_LOCK" 2>/dev/null
+  trap - EXIT HUP INT TERM
+}
+
 # cfg_set <key> <value> — rewrites in place, appends if the key is absent.
 cfg_set() {
-  local key="$1" value="$2" tmp
+  local key="$1" value="$2" tmp rc
   ensure_config || return 1
+  cfg_lock || {
+    err "another buzzer is writing the config; gave up after ${CONFIG_LOCK_TIMEOUT}s"
+    err "if nothing else is running, remove $(tilde "$CONFIG_LOCK")"
+    return 1
+  }
   tmp="$CONFIG_FILE.tmp.$$"
   BZ_KEY="$key" BZ_VAL="$value" awk '
     BEGIN { key = ENVIRON["BZ_KEY"]; val = ENVIRON["BZ_VAL"]; written = 0 }
@@ -308,6 +377,10 @@ cfg_set() {
     }
     END { if (!written) print key "=" val }
   ' "$CONFIG_FILE" >"$tmp" 2>/dev/null && mv "$tmp" "$CONFIG_FILE" 2>/dev/null
+  rc=$?
+  [ "$rc" -eq 0 ] || rm -f "$tmp" 2>/dev/null
+  cfg_unlock
+  return "$rc"
 }
 
 is_event() {
