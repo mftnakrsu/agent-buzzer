@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 # macOS ships old everything and users build from source sometimes; keep the
 # floor low enough that a distro toolchain works.
-rust-version = "1.74"
+rust-version = "1.89"   # std::fs::File::try_lock, which is why there is no fs4 dependency
 description = "Plays a sound when your AI agent finishes, and stays quiet when it shouldn't"
 license = "MIT"
 
