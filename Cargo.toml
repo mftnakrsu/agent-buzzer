@@ -1,0 +1,25 @@
+[package]
+name = "agent-buzzer"
+version = "0.1.0"
+edition = "2021"
+# macOS ships old everything and users build from source sometimes; keep the
+# floor low enough that a distro toolchain works.
+rust-version = "1.74"
+description = "Plays a sound when your AI agent finishes, and stays quiet when it shouldn't"
+license = "MIT"
+
+[[bin]]
+name = "buzzer"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = "z"
+# Deliberately no `strip`. On Apple silicon, any post-link step that invalidates
+# the Mach-O signature makes the binary SIGKILL on launch -- exit 137, no
+# diagnostic, and CI cannot notice unless it runs what it built. Stripping is
+# done in the release workflow, followed by codesign and a verify step.
