@@ -230,6 +230,7 @@ add:
       # argument to bash. This is the mechanism the Rust port will use to prove
       # parity, so it has to keep working long before anything depends on it.
       - name: Silence rules (bash, via BUZZER_BIN)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -eu
@@ -238,6 +239,8 @@ add:
           chmod +x "$wrapper"
           BUZZER_BIN="$wrapper" ./tests/run.sh
 ```
+
+**`if: runner.os == 'Linux'` is not an afterthought.** Without it this runs the whole suite a second time on every platform. Measured: Windows CI went from 6m11s to 10m17s. What the step actually checks — that `BUZZER_BIN` is still honoured — is plain shell with no platform-specific behaviour, so one fast platform proves it. The phase 3 parity gate runs a real Rust binary and is a different job that *will* need all three.
 
 - [ ] **Step 2: Verify the workflow file is valid YAML**
 
