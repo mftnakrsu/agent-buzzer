@@ -73,6 +73,19 @@ jobs:
         shell: bash
         run: ./tests/run.sh
 
+      # The same suite, driven through an external executable rather than as an
+      # argument to bash. This is the mechanism the Rust port will use to prove
+      # parity, so it has to keep working long before anything depends on it —
+      # otherwise it rots unnoticed and is found broken on the day it matters.
+      - name: Silence rules (bash, via BUZZER_BIN)
+        shell: bash
+        run: |
+          set -eu
+          wrapper="$RUNNER_TEMP/buzzer-wrapper"
+          printf '#!/bin/sh\nexec bash "%s/buzzer.sh" "$@"\n' "$PWD" > "$wrapper"
+          chmod +x "$wrapper"
+          BUZZER_BIN="$wrapper" ./tests/run.sh
+
       - name: Silence rules (PowerShell)
         if: runner.os == 'Windows'
         shell: pwsh
