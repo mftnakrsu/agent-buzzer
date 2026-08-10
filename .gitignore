@@ -12,3 +12,6 @@
 # test leftovers, if a run is interrupted before it can clean up
 /tmp/
 buzzer-test.*
+
+# Rust build output
+/target/
