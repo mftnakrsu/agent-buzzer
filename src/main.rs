@@ -4,6 +4,7 @@
 //! the full CLI arrive in phase 3. See
 //! docs/superpowers/specs/2026-08-10-rust-rewrite-design.md.
 
+mod config;
 mod rules;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
