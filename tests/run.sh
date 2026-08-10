@@ -710,6 +710,130 @@ test_log_is_capped() {
 }
 
 # ---------------------------------------------------------------------------
+# Concurrent writers
+#
+# A hook can fire while you are in the middle of a `buzzer` command, so both
+# state files have to survive two processes touching them at once. These tests
+# all failed before the config lock and the per-process trim file existed.
+# ---------------------------------------------------------------------------
+
+test_concurrent_config_writes_do_not_lose_updates() {
+  local want missing=""
+  # Eight writers, every one a different key, so none of them legitimately
+  # overwrites another: anything missing at the end was silently dropped.
+  # 'done' is quoted because it is also a shell keyword, and shellcheck is
+  # right to want it said out loud.
+  cli volume 0.11 'done' >/dev/null 2>&1 &
+  cli volume 0.22 waiting >/dev/null 2>&1 &
+  cli volume 0.33 error >/dev/null 2>&1 &
+  cli volume 0.44 subagent >/dev/null 2>&1 &
+  cli disable waiting >/dev/null 2>&1 &
+  cli disable error >/dev/null 2>&1 &
+  cli threshold 77 >/dev/null 2>&1 &
+  cli off >/dev/null 2>&1 &
+  wait
+
+  for want in done_volume=0.11 waiting_volume=0.22 error_volume=0.33 \
+    subagent_volume=0.44 waiting_enabled=false error_enabled=false \
+    threshold_seconds=77 enabled=false; do
+    grep -qx "$want" "$STATE/config" || missing="$missing $want"
+  done
+  [ -z "$missing" ] || fail_with "concurrent writes were lost:$missing"
+}
+
+test_concurrent_config_writes_leave_no_litter() {
+  cli threshold 31 >/dev/null 2>&1 &
+  cli threshold 32 >/dev/null 2>&1 &
+  wait
+  if [ -e "$STATE/config.lock" ]; then
+    fail_with "the config lock outlived the command that took it"
+  fi
+  # A leftover .tmp means a writer died mid-rename and nobody swept up.
+  if ls "$STATE"/config.tmp.* >/dev/null 2>&1; then
+    fail_with "a temp config file was left behind: $(echo "$STATE"/config.tmp.*)"
+  fi
+}
+
+test_log_trim_does_not_use_a_shared_scratch_file() {
+  local lines
+  # The race this guards is timing-dependent and so cannot be provoked on
+  # demand, but the property behind it can be checked exactly: the scratch file
+  # a trim writes must belong to that process alone. Wedging the old shared
+  # name proves which one is in use — a trim that still reaches for it cannot
+  # write, silently gives up, and lets the log grow past its cap.
+  mkdir -p "$STATE/log.trim"
+  awk 'BEGIN { for (i = 0; i < 160; i++) print "2020-01-01T00:00:00+0000 seed " i }' \
+    >"$STATE/log"
+  hook 'done' s1 >/dev/null 2>&1
+  lines=$(wc -l <"$STATE/log" | tr -d ' ')
+  if [ "$lines" -gt 145 ]; then
+    fail_with "log still at $lines lines: the trim depends on a shared scratch file"
+  fi
+  rm -rf "$STATE/log.trim"
+}
+
+test_concurrent_log_trims_do_not_truncate_the_log() {
+  local i=0 lines
+  # Seed past LOG_MAX so every hook below trims, which is when the shared
+  # scratch file used to let one hook's partial read become the whole log.
+  awk 'BEGIN { for (i = 0; i < 160; i++) print "2020-01-01T00:00:00+0000 seed " i }' \
+    >"$STATE/log"
+  while [ "$i" -lt 8 ]; do
+    hook 'done' "s$i" >/dev/null 2>&1 &
+    i=$((i + 1))
+  done
+  wait
+  lines=$(wc -l <"$STATE/log" | tr -d ' ')
+  # LOG_KEEP is 100. Anything far below it means a trim clobbered a trim.
+  if [ "$lines" -lt 90 ]; then
+    fail_with "concurrent trims cut the log to $lines lines; it should keep ~100"
+  fi
+  if ls "$STATE"/log.trim.* >/dev/null 2>&1; then
+    fail_with "a temp log file was left behind: $(echo "$STATE"/log.trim.*)"
+  fi
+}
+
+test_a_held_config_lock_is_never_walked_past() {
+  local out
+  # The property the whole lock rests on: a writer that cannot take the lock
+  # refuses, and says so, rather than helping itself. That holds however old
+  # the lock looks — an age-based exemption is exactly what used to let two
+  # writers into the config together. Deliberately slow: it waits out the full
+  # acquire timeout to prove the writer gives up rather than takes.
+  mkdir -p "$STATE/config.lock"
+  printf '%s\n' "$(($(date +%s) - 3600))" >"$STATE/config.lock/stamp"
+  out=$(cli threshold 99 2>&1 >/dev/null)
+
+  if grep -qx 'threshold_seconds=99' "$STATE/config"; then
+    fail_with "a held lock was walked past, even though the write was refused"
+  fi
+  if [ ! -d "$STATE/config.lock" ]; then
+    fail_with "the holder's lock was deleted out from under it"
+  fi
+  case "$out" in
+    *"another buzzer is writing the config"*) ;;
+    *) fail_with "a refused write must say why, got: $out" ;;
+  esac
+  # And it must be recoverable by hand, which means naming the thing to remove.
+  case "$out" in
+    *config.lock*) ;;
+    *) fail_with "a refused write must name the lock to remove, got: $out" ;;
+  esac
+  rm -rf "$STATE/config.lock"
+}
+
+test_a_refused_config_write_reports_failure() {
+  # A write that did not happen must not exit 0. Every CLI path that writes
+  # config goes through cfg_set, so if one of them swallows the result the user
+  # is told their setting was saved when it was not.
+  mkdir -p "$STATE/config.lock"
+  if cli threshold 99 >/dev/null 2>&1; then
+    fail_with "a refused config write exited 0"
+  fi
+  rm -rf "$STATE/config.lock"
+}
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1104,6 +1228,13 @@ run_test "per-event volume overrides the default" test_per_event_volume_override
 run_test "out-of-range volume falls back" test_out_of_range_volume_falls_back
 
 run_test "the log is capped" test_log_is_capped
+
+run_test "concurrent config writes are not lost" test_concurrent_config_writes_do_not_lose_updates
+run_test "concurrent config writes leave no litter" test_concurrent_config_writes_leave_no_litter
+run_test "log trimming uses a private scratch file" test_log_trim_does_not_use_a_shared_scratch_file
+run_test "concurrent log trims keep the log" test_concurrent_log_trims_do_not_truncate_the_log
+run_test "a held config lock is never walked past" test_a_held_config_lock_is_never_walked_past
+run_test "a refused config write reports failure" test_a_refused_config_write_reports_failure
 
 run_test "status agrees with the hook" test_status_agrees_with_the_hook
 run_test "status reports unknown focus honestly" test_status_reports_unknown_focus_honestly
