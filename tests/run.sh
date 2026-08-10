@@ -13,6 +13,8 @@
 #     ./tests/run.sh              # all tests
 #     ./tests/run.sh quiet        # only tests whose name matches "quiet"
 #
+# BUZZER_BIN            the implementation under test; unset means buzzer.sh
+#
 # How it fakes the outside world (all of these are read by buzzer.sh itself):
 #   BUZZER_HOME           throwaway state directory per test
 #   BUZZER_DRY_RUN=1      record what would play into $BUZZER_HOME/played
@@ -28,7 +30,16 @@
 set -u
 
 ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
-BUZZER="$ROOT/buzzer.sh"
+
+# The program under test. Set BUZZER_BIN to run this same suite against a
+# different implementation.
+if [ -n "${BUZZER_BIN:-}" ]; then
+  BUZZER="$BUZZER_BIN"
+  BUZZER_CMD=("$BUZZER_BIN")
+else
+  BUZZER="$ROOT/buzzer.sh"
+  BUZZER_CMD=(bash "$ROOT/buzzer.sh")
+fi
 FILTER="${1-}"
 
 PASSED=0
@@ -125,13 +136,13 @@ hook() {
   printf '{"session_id":"%s","transcript_path":"/tmp/t.jsonl","hook_event_name":"Stop"}' "$sid" |
     env BUZZER_HOME="$STATE" BUZZER_DRY_RUN=1 TERM_PROGRAM="$TP" \
       BUZZER_FAKE_FRONTMOST="$FF" BUZZER_FAKE_NOW="$NOW" \
-      bash "$BUZZER" hook "$event"
+      "${BUZZER_CMD[@]}" hook "$event"
 }
 
 cli() {
   env BUZZER_HOME="$STATE" BUZZER_DRY_RUN=1 TERM_PROGRAM="$TP" \
     BUZZER_FAKE_FRONTMOST="$FF" BUZZER_FAKE_NOW="$NOW" \
-    bash "$BUZZER" "$@"
+    "${BUZZER_CMD[@]}" "$@"
 }
 
 # mark_ago <session_id> <seconds> — pretend the turn started N seconds ago.
@@ -524,7 +535,7 @@ test_hook_prints_nothing_and_exits_zero() {
 test_mark_prints_nothing_and_exits_zero() {
   local out status
   out=$(printf '{"session_id":"s1"}' |
-    env BUZZER_HOME="$STATE" bash "$BUZZER" mark 2>&1)
+    env BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" mark 2>&1)
   status=$?
   assert_eq "0" "$status" "mark exit status"
   assert_eq "" "$out" "mark output"
@@ -553,7 +564,7 @@ test_hook_survives_missing_home() {
 test_hook_survives_empty_stdin() {
   local out status
   out=$(printf '' | env BUZZER_HOME="$STATE" BUZZER_DRY_RUN=1 BUZZER_FAKE_FRONTMOST="-" \
-    bash "$BUZZER" hook 'done' 2>&1)
+    "${BUZZER_CMD[@]}" hook 'done' 2>&1)
   status=$?
   assert_eq "0" "$status" "hook exit status with empty stdin"
   assert_eq "" "$out" "hook output with empty stdin"
@@ -602,7 +613,7 @@ EOF
   start=$(date +%s)
   printf '{"session_id":"abc123"}' |
     env PATH="$bin:$PATH" BUZZER_HOME="$STATE" BUZZER_FAKE_FRONTMOST="-" \
-      bash "$BUZZER" hook 'done'
+      "${BUZZER_CMD[@]}" hook 'done'
   elapsed=$(($(date +%s) - start))
 
   if [ "$elapsed" -ge 3 ]; then
@@ -624,7 +635,7 @@ EOF
 
 test_session_id_is_sanitized() {
   printf '{"session_id":"../../../tmp/buzzer-escape"}' |
-    env BUZZER_HOME="$STATE" bash "$BUZZER" mark
+    env BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" mark
   if [ -e "/tmp/buzzer-escape" ]; then
     rm -f /tmp/buzzer-escape
     fail_with "a session id escaped the marks directory"
@@ -635,7 +646,7 @@ test_session_id_is_sanitized() {
 }
 
 test_session_id_with_slashes_still_measures_duration() {
-  printf '{"session_id":"a/b/c"}' | env BUZZER_HOME="$STATE" bash "$BUZZER" mark
+  printf '{"session_id":"a/b/c"}' | env BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" mark
   # Same id in, same sanitized file out, so the duration is still found (and a
   # 0-second turn is below the threshold).
   hook 'done' "a/b/c"
@@ -644,7 +655,7 @@ test_session_id_with_slashes_still_measures_duration() {
 }
 
 test_empty_session_id_writes_no_mark() {
-  printf '{"session_id":""}' | env BUZZER_HOME="$STATE" bash "$BUZZER" mark
+  printf '{"session_id":""}' | env BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" mark
   assert_eq "0" "$(find "$STATE/marks" -type f 2>/dev/null | wc -l | tr -d ' ')" "mark count"
 }
 
@@ -653,7 +664,7 @@ test_old_marks_are_pruned() {
   printf '1\n' >"$STATE/marks/ancient"
   touch -t 202001010000 "$STATE/marks/ancient" 2>/dev/null ||
     fail_with "could not backdate a file; skipping prune check"
-  printf '{"session_id":"fresh"}' | env BUZZER_HOME="$STATE" bash "$BUZZER" mark
+  printf '{"session_id":"fresh"}' | env BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" mark
   local waited=0
   while [ -f "$STATE/marks/ancient" ] && [ "$waited" -lt 30 ]; do
     sleep 0.1
@@ -909,14 +920,14 @@ test_cli_does_not_touch_settings_json() {
   settings="$fake_home/.claude/settings.json"
   printf '{"model":"opus"}' >"$settings"
   before=$(cat "$settings")
-  env HOME="$fake_home" BUZZER_HOME="$STATE" bash "$BUZZER" on >/dev/null 2>&1
-  env HOME="$fake_home" BUZZER_HOME="$STATE" bash "$BUZZER" set 'done' bird.wav >/dev/null 2>&1
-  env HOME="$fake_home" BUZZER_HOME="$STATE" bash "$BUZZER" hooks >/dev/null 2>&1
-  env HOME="$fake_home" BUZZER_HOME="$STATE" bash "$BUZZER" doctor >/dev/null 2>&1
-  env HOME="$fake_home" BUZZER_HOME="$STATE" bash "$BUZZER" status >/dev/null 2>&1
-  printf '{"session_id":"x"}' | env HOME="$fake_home" BUZZER_HOME="$STATE" bash "$BUZZER" mark
+  env HOME="$fake_home" BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" on >/dev/null 2>&1
+  env HOME="$fake_home" BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" set 'done' bird.wav >/dev/null 2>&1
+  env HOME="$fake_home" BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" hooks >/dev/null 2>&1
+  env HOME="$fake_home" BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" doctor >/dev/null 2>&1
+  env HOME="$fake_home" BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" status >/dev/null 2>&1
+  printf '{"session_id":"x"}' | env HOME="$fake_home" BUZZER_HOME="$STATE" "${BUZZER_CMD[@]}" mark
   printf '{"session_id":"x"}' | env HOME="$fake_home" BUZZER_HOME="$STATE" BUZZER_DRY_RUN=1 \
-    bash "$BUZZER" hook 'done'
+    "${BUZZER_CMD[@]}" hook 'done'
   assert_eq "$before" "$(cat "$settings")" "settings.json contents"
 }
 
@@ -974,7 +985,7 @@ test_list_shows_every_event() {
 # non-zero exit, both landing in the agent's session.
 test_hook_survives_an_unset_home() {
   local out rc
-  out=$(env -u HOME -u BUZZER_HOME bash "$BUZZER" hook 'done' </dev/null 2>&1)
+  out=$(env -u HOME -u BUZZER_HOME "${BUZZER_CMD[@]}" hook 'done' </dev/null 2>&1)
   rc=$?
   assert_eq "0" "$rc" "hook exit status with HOME unset"
   if [ -n "$out" ]; then
@@ -984,7 +995,7 @@ test_hook_survives_an_unset_home() {
 
 test_mark_survives_an_unset_home() {
   local out rc
-  out=$(printf '{"session_id":"x"}' | env -u HOME -u BUZZER_HOME bash "$BUZZER" mark 2>&1)
+  out=$(printf '{"session_id":"x"}' | env -u HOME -u BUZZER_HOME "${BUZZER_CMD[@]}" mark 2>&1)
   rc=$?
   assert_eq "0" "$rc" "mark exit status with HOME unset"
   if [ -n "$out" ]; then
@@ -1002,7 +1013,7 @@ test_default_config_never_names_a_missing_sound() {
   fresh="$STATE/freshhome"
   mkdir -p "$fresh"
   # Force the no-system-sounds branch that Linux and Windows take.
-  env BUZZER_HOME="$fresh" BUZZER_FAKE_OS=linux bash "$BUZZER" list >/dev/null 2>&1
+  env BUZZER_HOME="$fresh" BUZZER_FAKE_OS=linux "${BUZZER_CMD[@]}" list >/dev/null 2>&1
 
   for event in 'done' waiting error subagent; do
     sound=$(sed -n "s/^${event}_sound=//p" "$fresh/config" 2>/dev/null | tail -n 1)
@@ -1024,7 +1035,7 @@ test_doctor_does_not_leak_hostname_or_home_path() {
   fake_home="$STATE/doctorhome"
   mkdir -p "$fake_home"
   out=$(env -u BUZZER_HOME HOME="$fake_home" BUZZER_FAKE_FRONTMOST="-" \
-    bash "$BUZZER" doctor 2>&1)
+    "${BUZZER_CMD[@]}" doctor 2>&1)
 
   case "$out" in
     *"$fake_home"*)
@@ -1058,7 +1069,7 @@ test_state_lives_outside_any_single_agents_directory() {
   fake_home="$STATE/statehome"
   mkdir -p "$fake_home"
   out=$(env -u BUZZER_HOME HOME="$fake_home" BUZZER_FAKE_FRONTMOST="-" \
-    bash "$BUZZER" status 2>&1)
+    "${BUZZER_CMD[@]}" status 2>&1)
   # Paths are printed ~-abbreviated (see tilde()), so match that form. The
   # literal tilde is the point here — expanding it to $HOME would test the
   # opposite of what this asserts.
@@ -1117,7 +1128,7 @@ test_hook_returns_when_focus_detection_hangs() {
   printf '{"session_id":"wedged"}' |
     env PATH="$bin:$PATH" BUZZER_HOME="$STATE" BUZZER_DRY_RUN=1 \
       TERM_PROGRAM="vscode" DISPLAY=":0" \
-      bash "$BUZZER" hook 'done'
+      "${BUZZER_CMD[@]}" hook 'done'
   elapsed=$(($(date +%s) - start))
 
   if [ "$elapsed" -ge 5 ]; then
