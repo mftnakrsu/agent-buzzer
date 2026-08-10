@@ -32,8 +32,8 @@ such problem on Unix.
 ## Goals
 
 - One implementation, one test suite, one linter.
-- No external programs at run time on macOS and Windows; on Linux, no *required*
-  ones (see Audio).
+- No external programs at run time on macOS and Windows. Linux is out of scope
+  for this rewrite; see #19 and #20.
 - Behaviour preserved. The silence rules are the product; none of them change.
 - Install stays roughly as easy as `./install.sh`, with no toolchain required.
 
@@ -49,17 +49,18 @@ such problem on Unix.
 
 Made with the user, in order, each one constraining the next.
 
-1. **Distribution: prebuilt binaries on GitHub Releases.** Five targets:
-   `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`,
-   `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`. `install.sh` detects
-   platform and downloads. Users must never need a Rust toolchain.
-2. **Native platform work, not shell-outs** — with one researched exception on
-   Linux, below.
+1. **Distribution: prebuilt binaries on GitHub Releases.** Three targets while
+   Linux is deferred: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+   `x86_64-pc-windows-msvc`. `install.sh` detects platform and downloads, and on
+   Linux keeps pointing at `buzzer.sh`. Users must never need a Rust toolchain.
+   The two Linux targets are added by #19.
+2. **Native platform work, not shell-outs.**
 3. **Coexistence until parity.** The shell implementations keep working and keep
    receiving fixes until the Rust binary passes the existing suite. Only then are
    they removed.
 4. **Single crate, pure decision core.**
-5. **Linux audio via runtime `dlopen`,** not link-time.
+5. **Linux platform code is deferred** to #19 (audio) and #20 (focus). Phases
+   3-5 target macOS and Windows; Linux keeps `buzzer.sh`.
 
 ## Architecture
 
@@ -142,23 +143,30 @@ Known gap, documented not fixed: AIFF-**C** with `sowt`/`twos` is restricted to
 
 ### Output
 
-Split by platform, because Linux has a link-time problem the others do not.
+**macOS and Windows only in this rewrite.** `cpal`, whose dependencies on those
+two are system frameworks (CoreAudio, WASAPI) that are always present, so there
+is nothing to fail.
 
-- **macOS and Windows:** `cpal`. Its dependencies there are system frameworks
-  (CoreAudio, WASAPI) that are always present, so there is nothing to fail.
-- **Linux:** a hand-rolled ALSA sink that `dlopen`s `libasound.so.2` via
-  `libloading` (~10 symbols: `snd_pcm_open`, `snd_pcm_hw_params*`,
-  `snd_pcm_writei`, `snd_pcm_drain`, `snd_pcm_close`).
+**Linux platform code is deferred to #19 (audio) and #20 (focus)** and is not
+part of phases 3–5. Linux users keep `buzzer.sh`, which the coexistence plan was
+already keeping alive until parity — so nothing regresses for them, and the two
+genuinely novel pieces of the port stop blocking the two platforms that are
+ready.
 
-Gated in `Cargo.toml` so `cpal` is not even a Linux dependency:
+Gate `cpal` so it is never a Linux dependency, which is what keeps #19 open as a
+choice rather than a repair:
 
 ```toml
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 cpal = "0.18"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-libloading = "0.9"
 ```
+
+This does change what "parity" means at the phase 3 gate. It stays a
+measurement, because `tests/run.sh` runs everything under `BUZZER_DRY_RUN=1`,
+which records what *would* play rather than playing it — so the Linux CI leg
+still exercises every silence rule and every decision, and only real playback is
+absent. What it cannot claim is that a Linux user hears anything. Phase 5 must
+not remove `buzzer.sh` until #19 and #20 land, or Linux users lose the tool.
 
 **Why not just use cpal everywhere.** `cpal` declares `alsa` as a non-optional
 Linux dependency, and `alsa-sys`'s build script resolves it with
@@ -238,12 +246,11 @@ depends on it).
 
 ## Focus detection
 
-| platform | mechanism |
-|---|---|
-| macOS | `NSWorkspace.frontmostApplication` via `objc2` + `objc2-app-kit` |
-| Windows | `GetForegroundWindow` + `GetWindowThreadProcessId` + `QueryFullProcessImageName` |
-| Linux X11 | `_NET_ACTIVE_WINDOW` / `WM_CLASS` via `x11rb` |
-| Linux sway | the sway IPC socket, spoken directly (IPC, not a spawned process) |
+| platform | mechanism | phase |
+|---|---|---|
+| macOS | `NSWorkspace.frontmostApplication` via `objc2` + `objc2-app-kit` | 3 |
+| Windows | `GetForegroundWindow` + `GetWindowThreadProcessId` + `QueryFullProcessImageName` | 3 |
+| Linux X11 / sway | `x11rb`, and the sway socket spoken directly | deferred, #20 |
 
 Bounded by a thread plus `recv_timeout(2s)`. A wedged call leaks a thread, which is
 acceptable because the process is short-lived — and unlike the shell version there
@@ -287,9 +294,12 @@ CI matrix, per researched constraints:
 |---|---|---|
 | aarch64-apple-darwin | `macos-latest` | nothing to install |
 | x86_64-apple-darwin | `macos-13` | nothing to install |
-| x86_64-unknown-linux-gnu | `ubuntu-22.04` | 22.04 for a glibc 2.35 floor |
-| aarch64-unknown-linux-gnu | `ubuntu-22.04-arm` | native runner, free for public repos; do **not** cross-compile |
 | x86_64-pc-windows-msvc | `windows-latest` | |
+
+Deferred with #19, recorded here so the research is not lost: Linux wants
+`ubuntu-22.04` for a glibc 2.35 floor, and `ubuntu-22.04-arm` — a native runner,
+free for public repos — rather than cross-compiling aarch64, which is painful
+once a C library is involved.
 
 **macOS binaries must be signed after the final post-link step.** Apple silicon
 refuses to execute arm64 code without a valid signature — failure is `Killed: 9`,
@@ -328,6 +338,8 @@ their own alongside.
 5. Release pipeline, `install.sh`, `THIRD-PARTY-NOTICES`.
 6. Remove `buzzer.ps1`, `tests/run.ps1`, and the PowerShell CI jobs. Tag v2.0.
    Close #5, #9, #11, #14 as superseded; revisit #2, #3, #8, #12.
+   **`buzzer.sh` stays** until #19 and #20 land -- it is the only Linux
+   implementation until then.
 
 Until step 6, `buzzer.sh` remains the shipping implementation and keeps taking
 fixes.
@@ -338,8 +350,12 @@ fixes.
   from documentation, not measurement — no Rust toolchain and no non-macOS host was
   available while writing this. That is the same failure mode that produced three
   CI failures earlier in this project's life. The Windows lock-release timing and
-  the Linux `dlopen` path get dedicated CI tests before anything depends on them.
-- **`dlopen`'d ALSA is code we own.** No crate does this today. It is roughly 200
-  lines of FFI and it is the one genuinely novel piece of the port.
+  the Windows lock-release timing gets a dedicated CI test before anything
+  depends on it.
+- **Linux is deferred, not solved.** #19 and #20 are the two genuinely novel
+  pieces of the port and they are now out of the critical path, which is the
+  point -- but it means v2.0 cannot retire `buzzer.sh` until they land, and a
+  half-finished port that ships anyway is how a project ends up maintaining
+  three implementations instead of two.
 - **Scope.** A rewrite is the classic place to lose a year. The parity gate exists
   to make "are we done" a measurement rather than an opinion.
