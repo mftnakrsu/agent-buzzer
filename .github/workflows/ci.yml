@@ -77,7 +77,15 @@ jobs:
       # argument to bash. This is the mechanism the Rust port will use to prove
       # parity, so it has to keep working long before anything depends on it —
       # otherwise it rots unnoticed and is found broken on the day it matters.
+      #
+      # Linux only, on purpose. What this checks is that BUZZER_BIN is still
+      # wired up, which is plain shell and platform-independent; running it
+      # everywhere just runs the whole suite twice. That is nearly free on
+      # Linux and costs five minutes on Windows, where Git Bash makes the suite
+      # slow enough already. The phase 3 parity gate, which runs a real Rust
+      # binary, is a different job and will need every platform.
       - name: Silence rules (bash, via BUZZER_BIN)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -eu
