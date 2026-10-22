@@ -496,6 +496,14 @@ volume=0.7
 done_sound=$bird
 "@ -Encoding UTF8
     $env:BUZZER_FAKE_NOW = '23:30'
+    # The threshold default is pinned from below too: a short turn stays
+    # silent and names the literal 30s default.
+    Set-Mark 'abc123' 5
+    Invoke-Hook 'done' 'abc123'
+    Assert-Silent
+    Assert-Reason '< 30s'
+    Clear-Played
+
     Set-Mark 'abc123' 120
     Invoke-Hook 'done' 'abc123'
     Assert-Played 'done'

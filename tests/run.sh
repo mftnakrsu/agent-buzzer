@@ -338,6 +338,15 @@ volume=0.7
 done_sound=$ROOT/sounds/bird.wav
 EOF
   NOW="23:30"
+  # The threshold default is pinned from below too: a short turn stays silent
+  # and names the literal 30s default, so lowering it (to 0, say) fails here.
+  mark_ago abc123 5
+  hook 'done' abc123
+  assert_silent
+  # Not the exact elapsed seconds, for the reason test_custom_threshold_respected gives.
+  assert_reason "< 30s"
+  rm -f "$STATE/played"
+
   mark_ago abc123 120
   hook 'done' abc123
   assert_played 'done'
