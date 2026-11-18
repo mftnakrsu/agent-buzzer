@@ -6,6 +6,7 @@
 
 mod config;
 mod rules;
+mod state;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
